@@ -1,0 +1,129 @@
+LOCUTOR — DOCKER / EASYPANEL — PRUEBA CPU PRIVADA
+5 octubre 2026
+
+Esta entrega sustituye las instrucciones anteriores para LXC/systemd.
+Usar un servicio App independiente en EasyPanel sobre el servidor de n8n.
+NO cambiar la aplicación Locutor publicada ni la configuración de n8n.
+Se entrega código con Dockerfile para linux/amd64; EasyPanel construirá la imagen.
+No es una imagen Docker precompilada ni un contenedor que deba usar systemd.
+
+CONTENIDO DEL PAQUETE
+- Locutor_EasyPanel_Codigo.zip: código para subir como Source/Upload.
+- voz-privada/: referencia WAV y transcripción, para montaje privado.
+- referencia_resultado_mac.mp3: audio para comparar, fuera de la imagen.
+- Este documento y VALIDACION.txt.
+La voz se excluye de la imagen y del ZIP de código. Nunca publicar la entrega.
+
+1. SERVICIO Y RECURSOS
+Crear un servicio App llamado locutor-pruebas en un proyecto separado.
+Source: Upload -> Locutor_EasyPanel_Codigo.zip.
+Builder: Dockerfile; Dockerfile en la raíz del archivo subido; contexto raíz.
+Host AMD64 (el AMD EPYC indicado). No GPU. Una sola réplica, un solo worker.
+Recursos iniciales propuestos: límite 4 CPU y 16 GiB de RAM, ajustables tras medir.
+No garantizan rendimiento. Reservar margen para n8n y para la construcción de la
+imagen. Presupuesto inicial de disco: 100 GB, incluyendo caché de construcción,
+modelo y audios; vigilar ocupación. No montar carpetas de n8n en Locutor.
+
+2. MONTAR ALMACENAMIENTO ANTES DEL PRIMER DEPLOY
+En Storage/Mounts de EasyPanel:
+- volumen propio locutor-datos -> /data (lectura/escritura)
+- volumen propio locutor-modelos -> /models (lectura/escritura)
+- carpeta privada del host -> /voice (SOLO LECTURA)
+
+Preparar la carpeta privada en el host Docker, por ejemplo:
+  install -d -m 0750 -o 10001 -g 10001 /srv/locutor-pruebas/voice
+  install -m 0640 -o 10001 -g 10001 /ruta/entrega/voz-privada/referencia_13s.wav /srv/locutor-pruebas/voice/
+  install -m 0640 -o 10001 -g 10001 /ruta/entrega/voz-privada/referencia_13s.txt /srv/locutor-pruebas/voice/
+Configurar el bind mount /srv/locutor-pruebas/voice -> /voice, readonly.
+Si EasyPanel no muestra readonly, configurar el montaje desde las opciones
+avanzadas del servicio o pedir al administrador que lo establezca allí.
+El proceso web usa UID/GID 10001. El arranque inicia como root solamente para
+asignar /data y /models, y baja a ese usuario antes de ejecutar Python.
+No requiere modo privilegiado, socket Docker ni montaje del host completo.
+No montar /app ni copiar el .env del servidor anterior.
+
+3. VARIABLES DE ENTORNO
+Generar un secreto en una terminal del administrador:
+  openssl rand -hex 48
+Pegar en Environment (reemplazar la primera línea):
+
+SECRET_KEY=VALOR_ALEATORIO_GENERADO
+COOKIE_SECURE=true
+BENCHMARK_ON_FIRST_START=true
+NUM_THREADS=4
+OMP_NUM_THREADS=4
+MKL_NUM_THREADS=4
+CONCURRENCY=1
+MAX_CONCURRENT_JOBS=1
+MAX_INPUT_CHARS=3000
+
+No activar la creación de un archivo .env dentro del código ni poner el secreto
+en el Dockerfile. Los valores por defecto de rutas, CPU y audio ya están en la
+imagen. API_BEARER_TOKEN permanece vacío (API de generación deshabilitada).
+No configurar WORKERS ni aumentar réplicas. Mantener el comando predeterminado.
+
+4. RED Y DOMINIO
+Configurar dominio HTTPS exclusivo de pruebas, destino HTTP al puerto interno
+8000. La aplicación escucha 0.0.0.0:8000 dentro del contenedor. EasyPanel termina
+TLS. No publicar directamente el puerto 8000 en Internet.
+La ruta de comprobación es /health. El proceso ignora las cabeceras de proxy;
+los límites por IP ven la IP del proxy. No habilitar confianza indiscriminada.
+Los usuarios y las descargas requieren sesión; no se sirve el directorio /voice.
+
+5. DEPLOY Y PRIMER ARRANQUE
+Pulsar Deploy. La construcción instala dependencias fijadas con hashes y PyTorch
+CPU. Necesita acceso a Docker Hub, repositorios Debian, PyPI y download.pytorch.org.
+El primer arranque descarga el modelo público desde Hugging Face a /models.
+Modelo: Qwen/Qwen3-TTS-12Hz-1.7B-Base, revisión fijada
+fd4b254389122332181a7c3db7f27e918eec64e3.
+Necesita salida HTTPS a huggingface.co y sus CDN/Xet. No sube la voz ni documentos.
+Los siguientes arranques reutilizan el modelo local y el motor trabaja offline.
+
+Con BENCHMARK_ON_FIRST_START=true se genera primero la prueba corta, sin cargar
+a la vez otro modelo web, y se guarda el resultado en:
+  /data/benchmark/informe.json
+  /data/benchmark/solo_voz.mp3
+  /data/benchmark/con_calma.mp3
+Después arranca la web. Si ya existe el informe, se omite la medición.
+La medición tiene timeout de 30 minutos. Si falla, NO se declara superada:
+consultar logs y límites de RAM/CPU antes de volver a desplegar.
+La descarga puede tardar adicionalmente. El healthcheck de Docker da 30 minutos
+de gracia; ampliar la espera inicial en EasyPanel si la descarga más el benchmark
+lo requieren, evitando reinicios repetidos durante la inicialización.
+No guardar un informe ficticio para saltar una medición fallida.
+Tras la primera medición se puede dejar BENCHMARK_ON_FIRST_START=false.
+
+6. USUARIO Y COMPROBACIÓN
+Cuando /health responda, abrir la consola del servicio y ejecutar:
+  gosu locutor python -m scripts.create_user --username rosario --admin
+(La consola puede abrir como root; gosu conserva el propietario correcto de SQLite.)
+Introducir la contraseña de forma interactiva; no ponerla en Environment o logs.
+Si la consola ya usa UID 10001, ejecutar python sin gosu.
+Abrir la URL HTTPS, iniciar sesión y subir samples/prueba.docx del ZIP de código.
+Revisar el guion, elegir Mi voz, 0,9 y Calma, confirmar revisión y generar.
+Comprobar ambas descargas. /health por sí solo no valida la voz.
+Las pruebas unitarias también se pueden ejecutar en consola:
+  gosu locutor python -m pytest -q -p no:cacheprovider
+
+7. RESULTADOS A DEVOLVER
+URL de pruebas y usuario; contraseña por canal privado.
+Informe JSON y ambos MP3 del benchmark (extraer desde el volumen o docker cp).
+CPU/RAM asignadas, tiempo de arranque y errores, si aparecen.
+Rosario comparará con referencia_resultado_mac.mp3 y valorará naturalidad.
+No asumir que la calidad/velocidad del Mac se reproduce idéntica en CPU.
+
+8. PERSISTENCIA, ACTUALIZACIONES Y LÍMITES
+/data: usuarios SQLite, guiones, audios e informe. /models: pesos y caché.
+Conservar ambos volúmenes y SECRET_KEY al reconstruir o actualizar la imagen.
+No borrar volúmenes al retirar temporalmente el servicio; detenerlo desde EasyPanel.
+La cola/trabajos activos son en memoria y se pierden al reiniciar. Los guiones sí
+persisten; para regenerar un trabajo perdido, guardar otra revisión.
+La adaptación de texto es manual. Límite inicial 3.000 caracteres, una generación.
+Los tiempos máximos no cancelan automáticamente el cálculo nativo de la web.
+Los archivos de audio no tienen limpieza periódica garantizada: vigilar /data/jobs.
+No hay retención automática de guiones. No abrir esta instancia a carga pública.
+Esta entrega es para validación, no autorización para sustituir producción.
+
+Documentación oficial EasyPanel: https://easypanel.io/docs/services/app
+
+NOTA: el aviso de Qwen indicando que flash-attn no está instalado es esperado en CPU. No instalar CUDA/FlashAttention para esta prueba.

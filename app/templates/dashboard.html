@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Locutor{% endblock %}
+{% block body %}
+<div class="container review-container">
+  {% if local_audio_trial %}<p class="review-notice">Prueba local en tu Mac: generación con tu voz activada. Revisa el guion antes de generar. La adaptación del texto es manual.</p>{% endif %}
+  {% if preview_only %}<p class="review-notice">Prueba local: puedes comparar, editar y guardar guiones. La generación de audio está desactivada en esta vista.</p>{% endif %}
+  <div class="hero">
+    <h1>Prepara tu próxima lectura</h1>
+    <p>Sube el tema, revisa lo que se va a decir y después genera el audio.</p>
+  </div>
+
+  <form id="upload-form" class="panel" method="post" action="/upload" enctype="multipart/form-data" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <!-- Paso 1: archivos -->
+    <label class="dropzone" id="dropzone">
+      <input type="file" id="files" name="files" multiple accept=".pdf,.docx" hidden>
+      <div class="dz-icon">↑</div>
+      <div class="dz-text">Arrastra tus archivos o <span>haz clic para elegir</span></div>
+      <small>PDF o Word · hasta {{ max_files }} archivos ({{ max_mb }} MB c/u)</small>
+      <div class="dz-files" id="dz-files"></div>
+    </label>
+
+    <button type="submit" class="btn" id="submit-btn">Extraer texto y revisar</button>
+    <p id="form-error" class="error" role="alert" hidden></p>
+  </form>
+
+  <section class="panel" aria-labelledby="saved-title">
+    <h2 id="saved-title">Tus guiones</h2>
+    <p class="muted">Retoma una revisión guardada, aunque cierres esta página.</p>
+    <div id="saved-reviews"></div>
+  </section>
+
+  <section class="panel review-panel" id="review-panel" data-preview="{{ 'true' if preview_only else 'false' }}" hidden aria-labelledby="review-title">
+    <p class="eyebrow">Paso 2 · Revisión antes de locutar</p>
+    <h2 id="review-title" tabindex="-1">Revisa el guion</h2>
+    <p id="review-source"></p>
+    <label class="field mode-field"><span>Tipo de lectura</span>
+      <select id="reading-mode"><option value="literal">Lectura literal</option><option value="adapted">Versión para escuchar</option></select>
+    </label>
+    <p id="mode-help">La lectura literal conserva el texto extraído. Comprueba que el documento se ha leído bien.</p>
+    <div class="script-columns">
+      <label class="field"><span>Texto original · se conserva</span><textarea id="original-text" readonly rows="15" spellcheck="false"></textarea></label>
+      <label class="field"><span>Guion que se va a locutar</span><textarea id="script-text" readonly rows="15" maxlength="{{ max_chars }}" spellcheck="true" lang="es" aria-describedby="mode-help script-count"></textarea></label>
+    </div>
+    <p id="script-count" class="muted"></p>
+    <details><summary>Cómo preparar una versión hablada</summary><p>Integra los títulos en la explicación, enlaza las listas con frases completas y usa oraciones claras. Conserva las ideas, cifras y términos importantes. Mantén literales las citas que deban aprenderse palabra por palabra.</p><p>Esta pantalla permite escribir o pegar la adaptación. Todavía no propone una versión automáticamente.</p></details>
+    <div class="review-actions"><button type="button" class="btn secondary" id="save-review">Guardar guion</button><a id="download-script" class="btn-download">Descargar guion guardado</a></div>
+    <p id="save-status" role="status" aria-live="polite"></p>
+    <details id="comparison"><summary>Ver cambios de la última versión guardada</summary><pre id="text-diff"></pre></details>
+    <div id="review-warnings" class="review-notice" hidden></div>
+    <p class="muted">La comparación señala cambios de texto; no verifica por sí sola que el contenido sea correcto.</p>
+    <hr>
+    <p class="eyebrow">Paso 3 · Audio</p>
+    <!-- Opciones de audio -->
+    <div class="row">
+      <label class="field">
+        <span>Voz</span>
+        <select name="voice" id="audio-voice">
+          {% for v in voices %}
+          <option value="{{ v.key }}" {% if v.default %}selected{% endif %}>{{ v.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">
+        <span>Velocidad</span>
+        <select name="speed" id="audio-speed">
+          <option value="0.9" {% if default_speed == 0.9 %}selected{% endif %}>Pausada · 10 % más lenta</option>
+          <option value="1.0" {% if default_speed == 1.0 %}selected{% endif %}>Normal</option>
+          <option value="1.15" {% if default_speed == 1.15 %}selected{% endif %}>Rápida</option>
+        </select>
+      </label>
+    </div>
+
+    <label class="field">
+      <span>Música de fondo</span>
+      <select name="music" id="audio-music">
+        {% for m in music_choices %}
+        <option value="{{ m.key }}" {% if m.key == default_music %}selected{% endif %}>{{ m.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p>Con música se generan dos descargas: solo voz y voz con fondo suave.</p>
+    <label class="confirmation"><input type="checkbox" id="review-confirm"> He revisado el guion, las cifras y las citas y quiero locutar esta versión.</label>
+    <button type="button" class="btn" id="generate-reviewed" disabled>Generar audio del guion revisado</button>
+    <p id="review-error" class="error" role="alert" hidden></p>
+  </section>
+
+  <div class="panel result" id="result" {% if not jobs %}hidden{% endif %}>
+    <h2>Audios</h2>
+    <p>La velocidad de escucha no modifica el MP3 descargado. En Moodle, sube las dos versiones para que el alumno elija.</p>
+    <div id="results-list">
+      {% for job in jobs %}
+      <div class="result-row-wrap" data-job-id="{{ job.id }}" data-status="{{ job.status }}" data-music-url="{{ job.music_download_url or '' }}">
+        <div class="result-row">
+          <span class="result-name">{{ job.source_name }}</span>
+          <span class="result-state"></span>
+          <a class="btn-download" href="{{ job.download_url }}" {% if not job.download_url %}hidden{% endif %}>Descargar solo voz</a>
+        </div>
+        <div class="bar"><span style="width: {{ (job.progress * 100)|int }}%"></span></div>
+        {% if job.download_url %}<audio aria-label="Solo voz" controls preload="none" src="{{ job.download_url }}"></audio>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/app.js" defer></script>
+{% endblock %}

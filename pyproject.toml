@@ -1,0 +1,51 @@
+[project]
+name = "locutor"
+version = "0.1.0"
+description = "App web segura de texto-a-voz (TTS) en español con sherpa-onnx"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "jinja2",
+    "python-multipart",
+    "sqlalchemy>=2.0",
+    "argon2-cffi",
+    "itsdangerous",
+    "pydantic>=2",
+    "pydantic-settings",
+    "pyyaml",
+    "num2words",
+    "soundfile",
+    "numpy",
+    "python-docx",
+    "pypdf",
+    "sherpa-onnx",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
+personal_cpu = ["qwen-tts==0.1.1", "torch==2.10.0", "torchaudio==2.10.0", "librosa==0.11.0", "numpy==2.3.5", "numba==0.63.1"]
+personal = ["mlx-audio==0.5.7; sys_platform == 'darwin' and platform_machine == 'arm64'"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*", "scripts*"]
+
+[tool.setuptools.package-data]
+app = ["templates/*.html", "static/*"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
