@@ -1,0 +1,23 @@
+LOCUTOR V2 — MEJORAS 8 OCTUBRE 2026
+Base: aiprojects-pro/locutorv2, commit 929e98d5fd3c0b1d3637a8434b1eab00daa901ba.
+
+Cambios:
+- Extracción DOCX trasladada desde locutor 2796bb9: orden de párrafos y tablas, celdas combinadas, tablas anidadas, controles de contenido y cuadros de texto. Incluye pruebas de regresión.
+- Progreso con etapas de preparación, procesamiento y exportación, número de parte y tiempo transcurrido. El porcentaje sigue basado en partes terminadas: no se inventa progreso dentro de una generación.
+- Registro chunk_done con duración por fragmento, índice y total, sin texto del documento. La duración incluye espera en la cola.
+- Al vencer el tiempo, se cancela el fragmento si todavía no ha empezado. Una generación nativa ya iniciada no se puede detener con este mecanismo.
+- Reintento de consulta de progreso ante HTTP 429 o 5xx; explicación ante un trabajo inexistente o sesión no disponible.
+
+Validación local: Python 3.12.14, 52 pruebas pytest correctas y comprobaciones Node de estados, tiempo, reintentos y errores correctas. Dependencias locales de prueba no idénticas al lock Linux. No se han ejecutado Qwen con la voz privada ni el contenedor Linux de producción. No se afirma una aceleración de síntesis.
+
+Instalación:
+1. Conservar copia de la versión desplegada y de sus datos persistentes.
+2. Aplicar el parche sobre el commit indicado (git apply --check primero), o usar este código completo como fuente de una imagen de prueba.
+3. Mantener las variables de entorno y los volúmenes /data, /models y /voice existentes. No sobrescribir la voz ni los datos privados con este paquete.
+4. Reconstruir la imagen y desplegar primero una instancia de prueba. No ejecutar cambios sobre producción sin validarla.
+5. Comprobar un Word con tablas y un texto breve con la voz privada; verificar orden del guion, audio y progreso. Comparar tiempos con el mismo texto, voz y parámetros antes de decidir el despliegue definitivo.
+
+Para diagnóstico CPU, ejecutar en la instancia de prueba: python -m scripts.benchmark_cpu
+Revisar /data/benchmark/informe.json y los eventos chunk_done. Comprobar también límites y throttling del contenedor. Subir CONCURRENCY no paraleliza el motor personalizado actual; estos cambios no alteran ese motor ni los parámetros de voz.
+
+Pruebas: python -m pytest tests -q; node tests/test_ui.cjs

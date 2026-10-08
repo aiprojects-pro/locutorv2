@@ -51,6 +51,11 @@ class Job:
     music: str = "none"
     created_at: float = field(default_factory=time.time)
 
+    stage: str = "queued"
+    started_at: float | None = None
+    finished_at: float | None = None
+    chunk_started_at: float | None = None
+
     @property
     def progress(self) -> float:
         if self.total_chunks == 0:
@@ -63,6 +68,9 @@ class Job:
             "source_name": self.source_name,
             "status": self.status,
             "progress": self.progress,
+            "stage": self.stage,
+            "elapsed_seconds": max(0, int((self.finished_at or time.monotonic()) - self.started_at)) if self.started_at is not None else 0,
+            "chunk_elapsed_seconds": max(0, int(time.monotonic() - self.chunk_started_at)) if self.chunk_started_at is not None and self.status == STATUS_PROCESSING else 0,
             "total_chunks": self.total_chunks,
             "done_chunks": self.done_chunks,
             "error": self.error,
@@ -113,6 +121,8 @@ class JobManager:
     def _run(self, job: Job, text: str, voice_key: str, speed: float) -> None:
         start = time.time()
         try:
+            job.started_at = time.monotonic()
+            job.stage = "preparing"
             job.status = STATUS_PROCESSING
             normalized = self.normalizer.normalize(text)
             chunks = chunk_text(normalized, self.settings.chunk_max_chars)
@@ -123,11 +133,25 @@ class JobManager:
             # Enviar un fragmento cada vez evita llenar la cola y seguir generando
             # un documento entero cuando falla una parte o vence su tiempo.
             results = []
-            for chunk in chunks:
+            for index, chunk in enumerate(chunks, 1):
+                job.stage = "synthesizing"
+                job.chunk_started_at = time.monotonic()
                 fut = self._chunk_pool.submit(self.engine.generate, voice_key, chunk, speed)
-                results.append(fut.result(timeout=self.settings.per_chunk_timeout_s))
+                try:
+                    results.append(fut.result(timeout=self.settings.per_chunk_timeout_s))
+                except FutureTimeout:
+                    # Cancel queued work; an already-running native call cannot be stopped.
+                    fut.cancel()
+                    raise
+                logger.info("fragmento completado", extra={
+                    "event": "chunk_done", "job_id": job.id,
+                    "chunk_index": index, "total_chunks": len(chunks),
+                    "duration_ms": int((time.monotonic() - job.chunk_started_at) * 1000),
+                })
                 job.done_chunks += 1
 
+            job.chunk_started_at = None
+            job.stage = "exporting"
             out_dir = self.settings.work_dir / job.id
             mp3_path = out_dir / "audio.mp3"
             music_path = out_dir / "audio_music.mp3" if job.music != "none" else None
@@ -141,6 +165,7 @@ class JobManager:
             )
             job.mp3_path = mp3_path
             job.music_mp3_path = music_path
+            job.stage = "done"
             job.status = STATUS_DONE
             logger.info(
                 "trabajo completado",
@@ -148,13 +173,19 @@ class JobManager:
                        "duration_ms": int((time.time() - start) * 1000)},
             )
         except FutureTimeout:
+            job.stage = "error"
             job.status = STATUS_ERROR
             job.error = "Tiempo de generación excedido en un fragmento."
             logger.warning("timeout de fragmento", extra={"job_id": job.id, "event": "job_timeout"})
         except Exception as exc:  # noqa: BLE001 - se registra y se expone genérico
+            job.stage = "error"
             job.status = STATUS_ERROR
             job.error = "Error al generar el audio."
             logger.exception("error en trabajo", extra={"job_id": job.id, "event": "job_error"})
+
+        finally:
+            job.finished_at = time.monotonic()
+            job.chunk_started_at = None
 
     # --- limpieza -------------------------------------------------------
 

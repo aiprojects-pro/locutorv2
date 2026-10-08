@@ -22,7 +22,7 @@ class JsonFormatter(logging.Formatter):
             "msg": record.getMessage(),
         }
         # Campos extra explícitos (p. ej. job_id, user, ip, status).
-        for key in ("job_id", "user", "ip", "status", "event", "duration_ms"):
+        for key in ("job_id", "user", "ip", "status", "event", "duration_ms", "chunk_index", "total_chunks"):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value

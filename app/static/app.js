@@ -7,11 +7,24 @@ const STATE_LABELS = {
   error: "Error",
 };
 
+function jobLabel(data) {
+  if (data.error) return data.error;
+  if (data.status !== "processing") return STATE_LABELS[data.status] || data.status;
+  const seconds = Math.max(0, Number(data.elapsed_seconds) || 0);
+  const elapsed = `${Math.floor(seconds / 60)} min ${Math.floor(seconds % 60)} s`;
+  if (data.stage === "preparing") return `Preparando texto… · ${elapsed}`;
+  if (data.stage === "exporting") return `Preparando el archivo de audio… · ${elapsed}`;
+  if (data.total_chunks > 0) {
+    return `Procesando parte ${Math.min(data.done_chunks + 1, data.total_chunks)} de ${data.total_chunks} · ${elapsed}. El progreso se actualiza al terminar cada parte.`;
+  }
+  return `Generando audio… · ${elapsed}`;
+}
+
 function renderRow(wrap, data) {
   wrap.dataset.status = data.status;
   wrap.querySelector(".result-name").textContent = data.source_name;
   const state = wrap.querySelector(".result-state");
-  state.textContent = data.error ? data.error : STATE_LABELS[data.status] || data.status;
+  state.textContent = jobLabel(data);
   state.style.color = data.status === "error" ? "var(--error)" : "var(--muted)";
   wrap.querySelector(".bar > span").style.width = Math.round(data.progress * 100) + "%";
 
@@ -94,7 +107,13 @@ function createRow(data) {
 async function pollJob(jobId, wrap) {
   try {
     const res = await fetch(`/jobs/${jobId}`, { headers: { Accept: "application/json" } });
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (res.status === 429 || res.status >= 500) throw new Error("temporary");
+      wrap.querySelector(".result-state").textContent = res.status === 404
+        ? "Este trabajo ya no está disponible."
+        : "No se puede consultar el trabajo. Recarga la página para comprobar tu sesión.";
+      return;
+    }
     const data = await res.json();
     renderRow(wrap, data);
     if (data.status === "pending" || data.status === "processing") {
